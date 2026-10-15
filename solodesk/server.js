@@ -1,0 +1,17 @@
+// SoloDesk local AI bridge. Prompts are forwarded to Ollama on this machine only.
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const { URL } = require('url');
+const ROOT = __dirname;
+const PORT = Number(process.env.PORT || 3000);
+const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
+const MODEL = process.env.OLLAMA_MODEL || 'qwen2.5:3b';
+const MIME = {'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.json':'application/json; charset=utf-8','.svg':'image/svg+xml'};
+function send(res,status,data,type='application/json; charset=utf-8'){res.writeHead(status,{'Content-Type':type,'X-Content-Type-Options':'nosniff','Cache-Control':'no-store'});res.end(type.startsWith('application/json')?JSON.stringify(data):data)}
+async function bodyJson(req){let data='';for await(const chunk of req){data+=chunk;if(data.length>100000)throw new Error('Request too large')}return JSON.parse(data||'{}')}
+async function ollama(pathname,options={}){const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),90000);try{const response=await fetch(OLLAMA_URL+pathname,{...options,signal:controller.signal});return response}finally{clearTimeout(timer)}}
+const server=http.createServer(async(req,res)=>{const url=new URL(req.url,'http://localhost');if(req.method==='GET'&&url.pathname==='/api/health'){try{const r=await ollama('/api/tags');if(!r.ok)throw new Error('not ready');const d=await r.json();const names=(d.models||[]).map(m=>m.name);send(res,200,{ollama:true,model:names.find(n=>n.startsWith(MODEL))||names[0]||'Ollama running; no model pulled',models:names})}catch{send(res,200,{ollama:false,model:null})}return}
+if(req.method==='POST'&&url.pathname==='/api/generate'){try{const data=await bodyJson(req);if(typeof data.prompt!=='string'||!data.prompt.trim())return send(res,400,{error:'Prompt is required'});const r=await ollama('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:MODEL,stream:false,messages:[{role:'system',content:'You are SoloDesk, a careful assistant for freelancers and small businesses. Produce useful, concise business writing. Never invent invoice facts, payment history, legal claims, or services. If details are missing, use neutral wording or placeholders. The user must review generated drafts before sending.'},{role:'user',content:data.prompt}],options:{temperature:0.4}})});if(!r.ok){const detail=await r.text();return send(res,502,{error:'Ollama could not generate a response',detail:detail.slice(0,300)})}const out=await r.json();return send(res,200,{text:out.message?.content||'',model:out.model||MODEL})}catch(e){return send(res,500,{error:'Could not reach the local model. Is Ollama running and the model downloaded?'})}}
+if(req.method!=='GET'&&req.method!=='HEAD'){return send(res,405,{error:'Method not allowed'})}let pathname=decodeURIComponent(url.pathname);if(pathname==='/')pathname='/index.html';const file=path.resolve(ROOT,'.'+pathname);if(!file.startsWith(ROOT+path.sep)){return send(res,403,{error:'Forbidden'})}fs.readFile(file,(err,content)=>{if(err)return send(res,404,{error:'Not found'});res.writeHead(200,{'Content-Type':MIME[path.extname(file)]||'application/octet-stream','X-Content-Type-Options':'nosniff'});if(req.method==='HEAD')return res.end();res.end(content)})});
+server.listen(PORT,'127.0.0.1',()=>console.log(`SoloDesk running at http://127.0.0.1:${PORT}\nOllama endpoint: ${OLLAMA_URL}\nConfigured model: ${MODEL}`));
