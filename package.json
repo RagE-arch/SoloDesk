@@ -1,0 +1,9 @@
+{
+  "name": "solodesk-local-ai",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A local-first freelance invoice tracker and open-weight AI writing assistant",
+  "main": "server.js",
+  "scripts": {"start": "node server.js"},
+  "engines": {"node": ">=18"}
+}
